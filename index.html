@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>多賽道賽車遊戲</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: linear-gradient(180deg, #101319 0%, #1f2937 100%);
+    color: #fff;
+    text-align: center;
+    overflow: hidden;
+  }
+  h2 { margin: 14px 0 6px; }
+  #hud {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 8px;
+    font-weight: bold;
+  }
+  .panel {
+    background: rgba(255,255,255,0.12);
+    padding: 8px 12px;
+    border-radius: 12px;
+    min-width: 110px;
+  }
+  canvas {
+    display: block;
+    margin: 0 auto;
+    background: #2f2f33;
+    border: 3px solid #d1d5db;
+    border-radius: 14px;
+    max-width: 95vw;
+    height: auto;
+    touch-action: none;
+  }
+  #controls {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    margin: 12px auto 18px;
+  }
+  .btn {
+    width: 110px;
+    height: 60px;
+    border: none;
+    border-radius: 16px;
+    background: #374151;
+    color: white;
+    font-size: 24px;
+    font-weight: bold;
+    box-shadow: 0 4px 0 #111827;
+  }
+  .btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #111827; }
+  #tip { font-size: 14px; color: #d1d5db; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+  <h2>🏎️ 多賽道賽車遊戲</h2>
+  <div id="hud">
+    <div class="panel" id="score">分數：0</div>
+    <div class="panel" id="best">最高分：0</div>
+  </div>
+  <canvas id="game" width="360" height="640"></canvas>
+  <div id="controls">
+    <button class="btn" id="leftBtn">⬅️</button>
+    <button class="btn" id="rightBtn">➡️</button>
+  </div>
+  <div id="tip">左右按鈕或滑動切換車道，閃避來車。</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const bestEl = document.getElementById('best');
+const lanes = [60, 180, 300];
+const roadLeft = 20;
+const roadWidth = 320;
+const laneWidth = roadWidth / 3;
+let score = 0;
+let best = Number(localStorage.getItem('car_best_score') || 0);
+let gameOver = false;
+let frame = 0;
+let roadOffset = 0;
+let enemySpeed = 5;
+let laneIndex = 1;
+let enemies = [];
+let particles = [];
+let touchStartX = null;
+
+bestEl.textContent = '最高分：' + best;
+
+const player = {
+  x: lanes[laneIndex],
+  y: 560,
+  w: 44,
+  h: 74,
+  emoji: '🚗'
+};
+
+function resetGame() {
+  score = 0;
+  gameOver = false;
+  frame = 0;
+  roadOffset = 0;
+  enemySpeed = 5;
+  laneIndex = 1;
+  player.x = lanes[laneIndex];
+  enemies = [];
+  particles = [];
+  scoreEl.textContent = '分數：0';
+  requestAnimationFrame(loop);
+}
+
+function moveLeft() {
+  if (gameOver) return;
+  laneIndex = Math.max(0, laneIndex - 1);
+  player.x = lanes[laneIndex];
+}
+
+function moveRight() {
+  if (gameOver) return;
+  laneIndex = Math.min(2, laneIndex + 1);
+  player.x = lanes[laneIndex];
+}
+
+document.getElementById('leftBtn').addEventListener('click', moveLeft);
+document.getElementById('rightBtn').addEventListener('click', moveRight);
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft') moveLeft();
+  if (e.key === 'ArrowRight') moveRight();
+  if (e.key.toLowerCase() === 'r' && gameOver) resetGame();
+});
+
+canvas.addEventListener('touchstart', e => {
+  touchStartX = e.touches[0].clientX;
+}, { passive: true });
+canvas.addEventListener('touchend', e => {
+  if (touchStartX === null) return;
+  const endX = e.changedTouches[0].clientX;
+  const dx = endX - touchStartX;
+  if (Math.abs(dx) > 20) {
+    if (dx < 0) moveLeft(); else moveRight();
+  }
+  touchStartX = null;
+}, { passive: true });
+
+function spawnEnemy() {
+  const lane = Math.floor(Math.random() * 3);
+  const emojis = ['🚙', '🚕', '🚓', '🚐', '🚚'];
+  enemies.push({
+    lane,
+    x: lanes[lane],
+    y: -90,
+    w: 44,
+    h: 74,
+    emoji: emojis[Math.floor(Math.random() * emojis.length)]
+  });
+}
+
+function collide(a, b) {
+  return Math.abs(a.x - b.x) < 34 && Math.abs(a.y - b.y) < 58;
+}
+
+function makeExplosion(x, y) {
+  for (let i = 0; i < 18; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: (Math.random() - 0.5) * 6,
+      life: 30 + Math.random() * 10,
+      size: 4 + Math.random() * 6,
+      color: ['#f59e0b', '#ef4444', '#fde68a'][Math.floor(Math.random()*3)]
+    });
+  }
+}
+
+function update() {
+  if (gameOver) return;
+  frame++;
+  roadOffset += enemySpeed;
+  if (roadOffset > 80) roadOffset = 0;
+
+  if (frame % Math.max(22, 55 - Math.floor(score / 5)) === 0) {
+    spawnEnemy();
+  }
+
+  enemySpeed = 5 + Math.min(6, Math.floor(score / 8) * 0.5);
+
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    e.y += enemySpeed;
+
+    if (collide(player, e)) {
+      gameOver = true;
+      makeExplosion(player.x, player.y);
+      if (score > best) {
+        best = score;
+        localStorage.setItem('car_best_score', String(best));
+        bestEl.textContent = '最高分：' + best;
+      }
+    }
+
+    if (e.y > 720) {
+      enemies.splice(i, 1);
+      score++;
+      scoreEl.textContent = '分數：' + score;
+      if (score > best) {
+        best = score;
+        localStorage.setItem('car_best_score', String(best));
+        bestEl.textContent = '最高分：' + best;
+      }
+    }
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= 1;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawRoad() {
+  ctx.fillStyle = '#4b5563';
+  ctx.fillRect(roadLeft, 0, roadWidth, canvas.height);
+
+  ctx.fillStyle = '#f3f4f6';
+  ctx.fillRect(roadLeft - 6, 0, 6, canvas.height);
+  ctx.fillRect(roadLeft + roadWidth, 0, 6, canvas.height);
+
+  ctx.strokeStyle = '#f8fafc';
+  ctx.lineWidth = 6;
+  ctx.setLineDash([36, 24]);
+  ctx.lineDashOffset = -roadOffset;
+  ctx.beginPath();
+  ctx.moveTo(roadLeft + laneWidth, 0);
+  ctx.lineTo(roadLeft + laneWidth, canvas.height);
+  ctx.moveTo(roadLeft + laneWidth * 2, 0);
+  ctx.lineTo(roadLeft + laneWidth * 2, canvas.height);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawCar(x, y, emoji, scale=1) {
+  ctx.save();
+  ctx.font = `${64 * scale}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, x, y);
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // 背景草地
+  ctx.fillStyle = '#166534';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawRoad();
+  drawCar(player.x, player.y, player.emoji, 1);
+  enemies.forEach(e => drawCar(e.x, e.y, e.emoji, 1));
+
+  particles.forEach(p => {
+    ctx.globalAlpha = Math.max(0, p.life / 40);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size/2, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 34px Arial';
+    ctx.fillText('💥 撞車了！', canvas.width / 2, 250);
+    ctx.font = '24px Arial';
+    ctx.fillText('分數：' + score, canvas.width / 2, 300);
+    ctx.fillText('最高分：' + best, canvas.width / 2, 336);
+    ctx.font = '20px Arial';
+    ctx.fillText('點一下畫面重新開始', canvas.width / 2, 390);
+  }
+}
+
+function loop() {
+  update();
+  draw();
+  if (!gameOver) requestAnimationFrame(loop);
+}
+
+canvas.addEventListener('click', () => {
+  if (gameOver) resetGame();
+});
+canvas.addEventListener('touchstart', () => {
+  if (gameOver) resetGame();
+}, { passive: true });
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
